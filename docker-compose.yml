@@ -1,0 +1,21 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: memory-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-memory}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-memory}
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "127.0.0.1:${PG_PORT:-5432}:5432"
+    volumes:
+      - ./data:/var/lib/postgresql/data
+      # 首次启动时自动建表；已存在数据卷时不会重跑
+      - ./sql/pg_schema.sql:/docker-entrypoint-initdb.d/10_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-memory} -d ${POSTGRES_DB:-memory}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
