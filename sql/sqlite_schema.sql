@@ -1,6 +1,6 @@
--- 个人工作台（SQLite）结构
--- 由 DSH 插件 @dely0/dsh-personal-workbench 生成；这里只是把结构固化下来，便于复刻。
--- 注意：字段名/表名随插件版本可能变化，本文件对应 1.17.2（2026-11-19 导出）。
+﻿-- SQLite 侧结构（任务 / 知识 / 点子），仅结构，无数据。
+-- 字段名与表名随生成该库的插件版本变化；本文件为某一时点快照。
+-- 用法：sqlite3 app.db < sqlite_schema.sql
 PRAGMA foreign_keys = ON;
 
 -- ---------- ai_session_registry ----------
