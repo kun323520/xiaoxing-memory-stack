@@ -1,79 +1,90 @@
-# xiaoxing-memory-stack
+﻿# xiaoxing-memory-stack
 
-一套「AI 长期记忆 + 任务工作台」的**数据库结构**。PostgreSQL 16 + pgvector 为主库，附一份 SQLite 侧的结构参考。
+Database schema for an **AI long-term memory + task workbench**: PostgreSQL 16 + pgvector as the main store, plus a SQLite schema for the task/workbench side.
 
-本仓库只包含**表结构、索引与建库脚本**，不含任何业务数据、示例记录或个人内容。
+> 中文说明见 [README.zh.md](README.zh.md)
+
+This repository contains **schema, indexes and bootstrap scripts only** — no business data, no sample records, no personal content.
 
 ```
-原文层   source / document / chunk        ← 文档切块、向量、全文索引
+raw layer        source / document / chunk        ← documents, chunks, vectors, full-text
   ↓
-结论层   memory / evidence                ← 一条条判断，带来源、有效期、被推翻记录
+conclusion layer memory / evidence                ← one judgement each: source, validity, superseded-by
   ↓
-关系层   entity / edge / alias            ← 谁和谁有关系
+relation layer   entity / edge / alias            ← who relates to whom
   ↑
-审计层   retrieval_logs / audit_log / memory_review / cost_entry
+audit layer      retrieval_logs / audit_log / memory_review / cost_entry
 ```
 
-## 一分钟起起来
+## Quick start
 
 ```bash
 git clone <this-repo> && cd xiaoxing-memory-stack
-cp .env.example .env      # 改 POSTGRES_PASSWORD
-docker compose up -d      # 起 pgvector/pgvector:pg16，首次自动执行建表脚本
+cp .env.example .env      # set POSTGRES_PASSWORD
+docker compose up -d      # starts pgvector/pgvector:pg16, runs the schema on first boot
 docker compose exec db psql -U memory -d memory -c '\dt'
 ```
 
-建表脚本：`sql/pg_schema.sql`（pg_dump --schema-only 导出，可直接 `psql -f`）。
-SQLite 侧：`sql/sqlite_schema.sql`（`sqlite3 app.db < sql/sqlite_schema.sql`）。
+Schema: `sql/pg_schema.sql` (from `pg_dump --schema-only`, safe to `psql -f`).
+SQLite side: `sql/sqlite_schema.sql` (`sqlite3 app.db < sql/sqlite_schema.sql`).
 
-## 两个库
+Load one demo record end-to-end:
 
-| 库 | 引擎 | 放什么 | 结构文件 |
+```bash
+pip install "psycopg[binary]"
+python demo_ingest.py --dsn postgresql://memory:memory@127.0.0.1:5432/memory
+```
+
+## Two databases
+
+| DB | Engine | Holds | Schema file |
 |---|---|---|---|
-| 记忆库 | PostgreSQL 16 + pgvector | 文档、切块、记忆、实体、证据、检索日志 | `sql/pg_schema.sql` |
-| 工作台库 | SQLite | 任务树、日历计划、知识条目、点子 | `sql/sqlite_schema.sql` |
+| Memory | PostgreSQL 16 + pgvector | documents, chunks, memories, entities, evidence, retrieval logs | `sql/pg_schema.sql` |
+| Workbench | SQLite | task tree, daily plans, knowledge entries, ideas | `sql/sqlite_schema.sql` |
 
-两者**不共享外键**，靠脚本同步。工作台坏了不影响记忆库，反之亦然。
+No shared foreign keys; they sync through scripts. A broken workbench DB never takes the memory DB down.
 
-## 表分组（PostgreSQL 侧 24 张）
+## Table groups (24 tables, PostgreSQL side)
 
-| 分组 | 表 | 做什么 |
+| Group | Tables | Purpose |
 |---|---|---|
-| 原文 | `source` `document` `chunk` | 来源、正文、切块；`chunk.embedding` 向量 + `chunk.content_tsv` 全文 |
-| 结论 | `memory` `memory_review` `memory_revision` `memory_link` | 一条记忆 = 一句判断 + 置信度 + 有效期 + 谁推翻了它 |
-| 溯源 | `evidence` | 每条结论挂回原文 `quote` + `locator` |
-| 关系 | `entity` `entity_alias` `edge` `predicate_dict` | 实体消歧 + 三元组，关系也有有效期 |
-| 时间 | `timeline_event` | 什么时候发生了什么 |
-| 项目 | `project` `run` `run_asset` `asset` | 项目、执行批次、产出物 |
-| 治理 | `retrieval_logs` `audit_log` `merge_log` `license_entry` `cost_entry` | 检索留痕、变更审计、素材许可、成本 |
-| 运维 | `schema_migrations` | 结构版本 |
+| Raw | `source` `document` `chunk` | source, body, chunk; `chunk.embedding` + `chunk.content_tsv` |
+| Conclusion | `memory` `memory_review` `memory_revision` `memory_link` | a memory = one statement + confidence + validity + who superseded it |
+| Evidence | `evidence` | `quote` + `locator` pointing back into the original text |
+| Relation | `entity` `entity_alias` `edge` `predicate_dict` | entity resolution + triples, relationships also expire |
+| Time | `timeline_event` | what happened when |
+| Project | `project` `run` `run_asset` `asset` | projects, runs, artefacts |
+| Governance | `retrieval_logs` `audit_log` `merge_log` `license_entry` `cost_entry` | retrieval traces, audit trail, asset licences, cost |
+| Ops | `schema_migrations` | schema version |
 
-字段级说明见 [docs/SCHEMA.md](docs/SCHEMA.md)；设计取舍见 [docs/DESIGN.md](docs/DESIGN.md)。
+Field-level notes: [docs/SCHEMA.md](docs/SCHEMA.md). Design rationale: [docs/DESIGN.md](docs/DESIGN.md).
 
-## 三个必须保留的设计
+## Three load-bearing design decisions
 
-1. **双路索引**：`chunk` 上同时有 `hnsw (vector_cosine_ops)` 与 `gin (content_tsv)`。向量管"意思相近"，全文管"名字/编号精确"。少一路，另一类查询就会失效。
-2. **记忆可被推翻**：`memory.superseded_by / supersedes_id / valid_from / valid_until`。只存"当时的结论"会丢掉"哪天、为什么改主意"。
-3. **去重靠数据库**：`ux_memory_active_content_hash (scope, content_hash)` 与 `ux_memory_active_dedupe (dedupe_key)` 都带 `WHERE status='active'` —— 同一判断只能有一条"活着"，脚本重跑不会写重。
+1. **Dual index.** `chunk` carries both `hnsw (vector_cosine_ops)` and `gin (content_tsv)`. Vector handles "similar meaning", full-text handles "exact name or id". Drop one and the other class of queries starts failing.
+2. **Memories can be overturned.** `memory.superseded_by / supersedes_id / valid_from / valid_until`. Storing only the current conclusion loses *when* and *why* you changed your mind.
+3. **Dedupe lives in the database.** `ux_memory_active_content_hash (scope, content_hash)` and `ux_memory_active_dedupe (dedupe_key)` are both `WHERE status='active'` — exactly one live copy per judgement, safe to re-run.
 
-## 需要自己补的部分
+## What you have to build yourself
 
-本仓库**不含**采集与检索脚本。你要接自己的流程，最小链路是：
+No ingestion or retrieval code is included. Minimum loop:
 
-1. 写 `source` → 2. 写 `document` → 3. 切块写 `chunk`（`content` / `content_tsv` / `embedding` / `content_hash`）
-4. 抽取结论写 `memory`（`status='candidate'`），用 `evidence` 挂回 `chunk_id` + `quote`
-5. 人工确认 → `status='active'`
-6. 检索：向量 + 全文各取 topK → 合并 → 回填 `access_count`、`retrieval_logs`
+1. write `source` → 2. write `document` → 3. chunk into `chunk` (`content` / `content_tsv` / `embedding` / `content_hash`)
+4. extract a statement into `memory` (`status='candidate'`), attach `evidence` pointing at `chunk_id` + `quote`
+5. human confirms → `status='active'`
+6. retrieve: vector top-K + full-text top-K → merge → bump `access_count`, write `retrieval_logs`
 
-`content_tsv` 用 `to_tsvector('simple', content)`；中文没有内置分词，需在应用层切词后再写入。
+`content_tsv` is `to_tsvector('simple', content)`; Chinese has no built-in tokenizer, so tokenise in the application layer first.
 
-## 已知限制
+## Known limitations
 
-- 没有 API 层与权限模型（单人本地库，隔离靠操作系统账号）。
-- 切块为固定长度 + 段落边界，非语义分段。
-- 检索无 rerank 模型。
-- `sqlite_schema.sql` 的结构随生成它的插件版本变化，本文件为某一时点的快照。
+- No API layer, no permission model (single-user local DB; isolation is the OS account).
+- Chunking is fixed-length with paragraph boundaries, not semantic segmentation.
+- No rerank model.
+- `sqlite_schema.sql` follows the plugin version that generated it; the file is a point-in-time snapshot.
 
 ## License
 
-MIT。数据库结构本身不受版权保护，保留出处即可。
+MIT. Schema itself is not copyrightable; attribution appreciated.
+
+中文说明见 [README.zh.md](README.zh.md)。
