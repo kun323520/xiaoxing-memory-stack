@@ -1,4 +1,4 @@
-﻿# 表结构速查
+# 表结构速查
 
 > 权威定义见 `sql/pg_schema.sql`。这里说明「一张表一行是什么、关键字段管什么」。
 
@@ -38,6 +38,9 @@
 | 权重 | `confidence` `importance` `decay_rate` `access_count` `last_accessed_at` | 排序与遗忘 |
 | 判重 | `content_hash` `dedupe_key` | 配合部分唯一索引使用 |
 | 治理 | `sensitivity` `approved_by` `approved_at` `review_reason` `reviewed_at` | 是否已确认、为何修改 |
+| 检索 | `statement_tsv` | **NOT NULL，且没有默认值或触发器**——写入时必须自己 `to_tsvector('simple', statement)` |
+
+**两个建库就会踩的约束**：`memory.predicate` 是指向 `predicate_dict(predicate)` 的外键，先插字典再写记忆；`memory.statement_tsv` 直接 `insert` 会报 `NotNullViolation`。
 
 ### `memory_revision`（13 列）
 每次修改留一版：`version`、旧 `statement`、`change_reason`、`actor_id`。历史不删除。
@@ -51,7 +54,7 @@
 ## 证据层
 
 ### `evidence`（18 列）
-`quote`（原文片段）+ `locator`（行号 / 页码 / 字符区间）+ `extractor_kind`（rule / llm / user）。
+`quote`（原文片段）+ `locator`（**jsonb**：放行号 / 页码 / 字符区间等任意定位信息）+ `extractor_kind`（rule / llm / user）。
 约束 `num_nonnulls(memory_id, entity_id, edge_id, timeline_event_id, asset_id) <= 1`：一条证据只指向一个对象。
 
 ## 关系层
